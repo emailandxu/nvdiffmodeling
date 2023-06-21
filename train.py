@@ -439,7 +439,7 @@ def main():
     parser.add_argument('-rtr', '--random-train-res', action='store_true', default=False)
     parser.add_argument('-dr', '--display-res', type=int, default=None)
     parser.add_argument('-tr', '--texture-res', nargs=2, type=int, default=[1024, 1024])
-    parser.add_argument('-di', '--display-interval', type=int, default=1)
+    parser.add_argument('-di', '--display-interval', type=int, default=0)
     parser.add_argument('-si', '--save-interval', type=int, default=1000)
     parser.add_argument('-lr', '--learning-rate', type=float, default=None)
     parser.add_argument('-lp', '--light-power', type=float, default=5.0)
