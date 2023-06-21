@@ -59,10 +59,13 @@ def shade(
     ################################################################################
 
     assert 'bsdf' in material, "Material must specify a BSDF type"
+    # print(material['bsdf'])
     if material['bsdf'] == 'pbr':
         shaded_col = ru.pbr_bsdf(kd, ks, gb_pos, gb_normal, view_pos, light_pos, min_roughness) * light_power
     elif material['bsdf'] == 'diffuse':
         shaded_col = kd * ru.lambert(gb_normal, util.safe_normalize(light_pos - gb_pos)) * light_power
+    elif material['bsdf'] == 'unlit':
+        shaded_col = kd
     elif material['bsdf'] == 'normal':
         shaded_col = (gb_normal + 1.0)*0.5
     elif material['bsdf'] == 'tangent':

@@ -37,4 +37,4 @@ def image_loss_fn(img, target, loss, tonemapper):
     elif loss == 'relmse':
         return _RELMSE(img, target)
     else:
-        return torch.nn.functional.l1_loss(img, target)
+        return torch.nn.functional.l1_loss(img, target, reduction='none')

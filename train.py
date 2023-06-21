@@ -51,7 +51,7 @@ def createLoss(FLAGS):
     elif FLAGS.loss == "mse":
         return lambda img, ref: ru.image_loss(img, ref, loss='mse', tonemapper='none')
     elif FLAGS.loss == "logl1":
-        return lambda img, ref: ru.image_loss(img, ref, loss='l1', tonemapper='log_srgb')
+        return lambda img, ref: ru.image_loss(img, ref, loss='l1', tonemapper='log_srgb', use_python=True)
     elif FLAGS.loss == "logl2":
         return lambda img, ref: ru.image_loss(img, ref, loss='mse', tonemapper='log_srgb')
     elif FLAGS.loss == "relativel2":
@@ -155,7 +155,9 @@ def optimize_mesh(
     # ==============================================================================================
 
     opt_material = {
-        'bsdf'   : ref_mesh.material['bsdf'],
+        # 'bsdf'   : ref_mesh.material['bsdf'],
+        # 'bsdf'   : 'diffuse',
+        'bsdf'   : FLAGS.opt_bsdf,
         'kd'     : kd_map_opt,
         'ks'     : ks_map_opt,
         'normal' : normal_map_opt
@@ -312,12 +314,20 @@ def optimize_mesh(
         #  Build transform stack for minibatching
         # ==============================================================================================
         for b in range(FLAGS.batch):
-            # Random rotation/translation matrix for optimization.
-            r_rot      = util.random_rotation_translation(0.25)
-            r_mv       = np.matmul(util.translate(0, 0, -RADIUS), r_rot)
-            mvp[b]     = np.matmul(proj_mtx, r_mv).astype(np.float32)
-            campos[b]  = np.linalg.inv(r_mv)[:3, 3]
-            lightpos[b] = util.cosine_sample(campos[b])*RADIUS
+            if FLAGS.mycl:
+                # rotate along y axis
+                r_rot = util.rotate_y(np.random.uniform(-np.pi, np.pi))
+                r_mv       = np.matmul(util.translate(0, 0, -RADIUS), r_rot)
+                mvp[b]     = np.matmul(proj_mtx, r_mv).astype(np.float32)
+                campos[b]  = np.linalg.inv(r_mv)[:3, 3]
+                lightpos[b] = campos[b]
+            else:
+                # Random rotation/translation matrix for optimization.
+                r_rot      = util.random_rotation_translation(0.25)
+                r_mv       = np.matmul(util.translate(0, 0, -RADIUS), r_rot)
+                mvp[b]     = np.matmul(proj_mtx, r_mv).astype(np.float32)
+                campos[b]  = np.linalg.inv(r_mv)[:3, 3]
+                lightpos[b] = util.cosine_sample(campos[b])*RADIUS
 
 
         params = {'mvp' : mvp, 'lightpos' : lightpos, 'campos' : campos, 'resolution' : [iter_res, iter_res], 'time' : 0}
@@ -349,15 +359,17 @@ def optimize_mesh(
         #  Compute loss
         # ==============================================================================================
         # Image-space loss
-        img_loss = image_loss_fn(color_opt, color_ref)
+        img_loss_map = image_loss_fn(color_opt, color_ref)
+        img_loss = torch.mean(img_loss_map)
 
         # Compute laplace loss
         lap_loss = lap_loss_fn.eval(params)
 
         # Debug, store every training iteration
-        # result_image = torch.cat([color_opt, color_ref], axis=2)
-        # np_result_image = result_image[0].detach().cpu().numpy()
-        # util.save_image(out_dir + '/' + ('train_%06d.png' % it), np_result_image)
+        if FLAGS.debug:
+            result_image = torch.cat([color_opt, color_ref, img_loss_map], axis=2)
+            np_result_image = result_image[0].detach().cpu().numpy()
+            util.save_image(out_dir + '/' + ('train_%06d.png' % it), np_result_image)
 
         # Log losses
         img_loss_vec.append(img_loss.item())
@@ -427,7 +439,7 @@ def main():
     parser.add_argument('-rtr', '--random-train-res', action='store_true', default=False)
     parser.add_argument('-dr', '--display-res', type=int, default=None)
     parser.add_argument('-tr', '--texture-res', nargs=2, type=int, default=[1024, 1024])
-    parser.add_argument('-di', '--display-interval', type=int, default=0)
+    parser.add_argument('-di', '--display-interval', type=int, default=1)
     parser.add_argument('-si', '--save-interval', type=int, default=1000)
     parser.add_argument('-lr', '--learning-rate', type=float, default=None)
     parser.add_argument('-lp', '--light-power', type=float, default=5.0)
@@ -443,12 +455,23 @@ def main():
     parser.add_argument('--config', type=str, default=None, help='Config file')
     parser.add_argument('-rm', '--ref_mesh', type=str)
     parser.add_argument('-bm', '--base-mesh', type=str)
-    
+    parser.add_argument('--optimizing-bsdf', type=str, default="pbr")
+    parser.add_argument('--only-optimize', type=str, default="kd", help="specify the only optimizing part of rendering parameter")
+    parser.add_argument('--debug', action='store_true', default=False)
+    parser.add_argument('--mycl', action='store_true', default=False, help="whether using my positional pattern of camera and light")
+
     FLAGS = parser.parse_args()
 
     FLAGS.camera_eye = [0.0, 0.0, RADIUS]
     FLAGS.camera_up  = [0.0, 1.0, 0.0]
-    FLAGS.skip_train = []
+
+    if FLAGS.only_optimize:
+        # only optimize diffuse map
+        FLAGS.skip_train = ['position', 'normal', 'kd', 'ks', 'displacement']
+        FLAGS.skip_train.remove(FLAGS.only_optimize)
+    else:
+        FLAGS.skip_train = []
+    
     FLAGS.displacement = 0.15
     FLAGS.mtl_override = None
 
