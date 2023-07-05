@@ -124,7 +124,8 @@ def merge_materials(materials, texcoords, tfaces, mfaces):
     # Normalize texture resolution across all materials & combine into a single large texture
     for tex in textures:
         if tex in materials[0]:
-            tex_data = torch.cat(tuple(util.scale_img_nhwc(mat[tex].data, tuple(max_res)) for mat in materials), dim=2) # Lay out all textures horizontally, NHWC so dim2 is x
+            # in case tex that has 4 and 3 channel raise exception
+            tex_data = torch.cat(tuple(util.scale_img_nhwc(mat[tex].data[...,:3], tuple(max_res)) for mat in materials), dim=2) # Lay out all textures horizontally, NHWC so dim2 is x
             tex_data = _upscale_replicate(tex_data, full_res)
             uber_material[tex] = texture.Texture2D(tex_data)
 

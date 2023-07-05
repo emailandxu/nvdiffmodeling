@@ -1,15 +1,15 @@
 {
-    "base_mesh": "data/sphere.obj",
+    "base_mesh": "data/spot/spot.obj",
     "ref_mesh": "data/spot/spot.obj",
     "camera_eye": [ 2.5, 0.0, -2.5 ],
     "camera_up": [ 0.0, 1.0, 0.0 ],
-    "random_textures": true,
-    "iter": 5000,
-    "save_interval": 1000,
-    "texture_res": [ 1024, 1024 ],
+    "random_textures": false,
+    "iter": 500,
+    "save_interval": 100,
+    "texture_res": [ 512, 512 ],
     "train_res": 512,
-    "batch": 8,
-    "learning_rate": 0.03,
+    "batch": 128,
+    "learning_rate": 0.003,
     "min_roughness" : 0.25,
     "out_dir" : "spot" 
 }

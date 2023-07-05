@@ -12,9 +12,7 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "--config", "configs/spot.json",
-                "--optimizing-bsdf", "diffuse",
-                "--debug"
+                "--config", "configs/lumba.json",
             ]
         }
     ]

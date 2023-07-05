@@ -1,0 +1,15 @@
+{
+    "base_mesh": "data/sphere.obj",
+    "ref_mesh": "data/wallaby/wallaby.obj",
+    "learning_rate": 0.01,
+    "camera_eye": [ 2.5, 0.0, -2.5 ],
+    "camera_up": [ 0.0, 1.0, 0.0 ],
+    "random_textures": true,
+    "iter": 5000,
+    "save_interval": 250,
+    "texture_res": [ 1024, 1024 ],
+    "train_res": 1024,
+    "batch": 8,
+    "min_roughness" : 0.25,
+    "out_dir" : "wallaby-diffuse" 
+}

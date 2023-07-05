@@ -25,6 +25,7 @@ from src import texture
 from src import render
 from src import regularizer
 from src.mesh import Mesh
+import random
 
 RADIUS = 3.5
 
@@ -149,6 +150,24 @@ def optimize_mesh(
         trainable_list += ks_map_opt.getMips()
     if not 'displacement' in FLAGS.skip_train and displacement_map_var is not None:
         trainable_list += [displacement_map_var]
+    
+    if FLAGS.skinning:
+        # pure initialization
+        # bone_mtx_opt = torch.tensor(np.identity(4, dtype=np.float32), device=normalized_base_mesh.bone_mtx.device).repeat((*normalized_base_mesh.bone_mtx.shape[0:2], 1, 1))
+        # frames, bones, 1/bones
+        v_weights_opt = torch.ones_like(normalized_base_mesh.v_weights) / normalized_base_mesh.bone_mtx.shape[1]
+
+        # copy initialization
+        bone_mtx_opt = normalized_base_mesh.bone_mtx.clone().detach()
+        # v_weights_opt = normalized_base_mesh.v_weights.clone().detach()
+        
+        bone_mtx_opt.requires_grad_(True)
+        v_weights_opt.requires_grad_(True)
+
+        if not 'bone_mtx' in FLAGS.skip_train: 
+            trainable_list += [bone_mtx_opt]
+        if not 'weights' in FLAGS.skip_train:
+            trainable_list += [v_weights_opt]
 
     # ==============================================================================================
     #  Setup material for optimized mesh
@@ -157,7 +176,7 @@ def optimize_mesh(
     opt_material = {
         # 'bsdf'   : ref_mesh.material['bsdf'],
         # 'bsdf'   : 'diffuse',
-        'bsdf'   : FLAGS.opt_bsdf,
+        'bsdf'   : FLAGS.optimizing_bsdf,
         'kd'     : kd_map_opt,
         'ks'     : ks_map_opt,
         'normal' : normal_map_opt
@@ -168,7 +187,7 @@ def optimize_mesh(
     # ==============================================================================================
 
     render_ref_mesh = mesh.compute_tangents(ref_mesh)
-    
+    render_ref_mesh = mesh.skinning(render_ref_mesh)
     # Compute AABB of reference mesh. Used for centering during rendering TODO: Use pre frame AABB?
     ref_mesh_aabb = mesh.aabb(render_ref_mesh.eval())
 
@@ -177,7 +196,7 @@ def optimize_mesh(
     # ==============================================================================================
 
     # Create optimized mesh with trainable positions 
-    opt_base_mesh = Mesh(v_pos_opt, normalized_base_mesh.t_pos_idx, material=opt_material, base=normalized_base_mesh)
+    opt_base_mesh = Mesh(v_pos_opt, normalized_base_mesh.t_pos_idx, material=opt_material, bone_mtx=bone_mtx_opt, v_weights=v_weights_opt, base=normalized_base_mesh)
 
     # Scale from [-1, 1] local coordinate space to match extents of the reference mesh
     opt_base_mesh = mesh.align_with_reference(opt_base_mesh, ref_mesh)
@@ -187,6 +206,9 @@ def optimize_mesh(
 
     # Set up tangent space
     opt_base_mesh = mesh.compute_tangents(opt_base_mesh)
+
+    # Set up opt mesh skining
+    opt_base_mesh = mesh.skinning(opt_base_mesh)
 
     # Subdivide if we're doing displacement mapping
     if FLAGS.subdivision > 0:
@@ -252,6 +274,7 @@ def optimize_mesh(
             a_campos = np.linalg.inv(a_mv)[None, :3, 3]
 
             params = {'mvp' : a_mvp, 'lightpos' : a_lightpos, 'campos' : a_campos, 'resolution' : [FLAGS.display_res, FLAGS.display_res], 
+            # 'time' : random.randint(0, len(ref_mesh.bone_mtx))}
             'time' : 0}
 
             # Render images, don't need to track any gradients
@@ -456,7 +479,8 @@ def main():
     parser.add_argument('-rm', '--ref_mesh', type=str)
     parser.add_argument('-bm', '--base-mesh', type=str)
     parser.add_argument('--optimizing-bsdf', type=str, default="pbr")
-    parser.add_argument('--only-optimize', type=str, default="kd", help="specify the only optimizing part of rendering parameter")
+    parser.add_argument('--only-optimize', type=str, default="", help="specify the only optimizing part of rendering parameter")
+    parser.add_argument('--skinning', action='store_true', default=False)
     parser.add_argument('--debug', action='store_true', default=False)
     parser.add_argument('--mycl', action='store_true', default=False, help="whether using my positional pattern of camera and light")
 
@@ -471,6 +495,8 @@ def main():
         FLAGS.skip_train.remove(FLAGS.only_optimize)
     else:
         FLAGS.skip_train = []
+    
+    print("skip_train:", FLAGS.skip_train)
     
     FLAGS.displacement = 0.15
     FLAGS.mtl_override = None

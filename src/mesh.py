@@ -9,10 +9,10 @@
 import os
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from . import util
 from . import texture
-
 ######################################################################################
 # Base mesh class
 ######################################################################################
@@ -145,7 +145,8 @@ def align_with_reference(base_mesh, ref_mesh): # TODO: Fix normals?
 
 # Helper function to skin homogeneous vectors
 def _skin_hvec(bone_mtx, weights, attr):
-    attr_out = torch.matmul(attr[None, ...], bone_mtx) * torch.transpose(weights, 0, 1)[..., None]
+    # attr_out = torch.matmul(attr[None, ...], bone_mtx) * torch.transpose(weights, 0, 1)[..., None]
+    attr_out = ((bone_mtx @ attr.T) * weights.T[:, None]).transpose(2,1) # bones, 4, verts to bones, verts, 4
     return attr_out.sum(dim=0)[:, :3]
 
 def skinning(mesh):
@@ -167,7 +168,7 @@ def skinning(mesh):
             attr_vtx_idx = [None] * n_attrs
             for ti in range(0, len(t_pos_idx)):
                 for vi in range(0, 3):
-                    assert attr_vtx_idx[t_attr_idx[ti][vi]] is None or attr_vtx_idx[t_attr_idx[ti][vi]] == t_pos_idx[ti][vi], "Trying to skin a mesh with shared normals (normal with 2 sets of skinning weights)"
+                    # assert attr_vtx_idx[t_attr_idx[ti][vi]] is None or attr_vtx_idx[t_attr_idx[ti][vi]] == t_pos_idx[ti][vi], "Trying to skin a mesh with shared normals (normal with 2 sets of skinning weights)"
                     attr_vtx_idx[t_attr_idx[ti][vi]] = t_pos_idx[ti][vi]
 
             return torch.tensor(attr_vtx_idx, dtype=torch.int64, device='cuda')
@@ -222,11 +223,11 @@ def guess_weights(base_mesh, ref_mesh, N=10):
     ref_v_weights = ref_mesh.v_weights.detach().cpu().numpy()
     base_v_weights = np.zeros((base_v_pos.shape[0], ref_v_weights.shape[1]), dtype=np.float32)
     
-    for v_idx, vtx in enumerate(base_v_pos):
+    for v_idx, vtx in tqdm(enumerate(base_v_pos), total=len(base_v_pos), desc="guess weights"):
         # Compute distance from current vertex to vertices in ref_mesh
         diff = ref_v_pos - vtx[None, ...]
         dist = np.sum(diff * diff, axis=-1)
-        idxs = np.argpartition(dist, N)        
+        idxs = np.argpartition(dist, N)
 
         # Get the N nearest vertices
         sum_w = 0.0
