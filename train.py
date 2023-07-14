@@ -170,6 +170,9 @@ def optimize_mesh(
             trainable_list += [bone_mtx_opt]
         if not 'weights' in FLAGS.skip_train:
             trainable_list += [v_weights_opt]
+    else:
+        bone_mtx_opt = None
+        v_weights_opt = None
 
     # ==============================================================================================
     #  Setup material for optimized mesh
