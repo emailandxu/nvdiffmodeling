@@ -151,6 +151,8 @@ def optimize_mesh(
     if not 'displacement' in FLAGS.skip_train and displacement_map_var is not None:
         trainable_list += [displacement_map_var]
     
+
+    # initalize trainable parameters for skining 
     if FLAGS.skinning:
         # pure initialization
         # bone_mtx_opt = torch.tensor(np.identity(4, dtype=np.float32), device=normalized_base_mesh.bone_mtx.device).repeat((*normalized_base_mesh.bone_mtx.shape[0:2], 1, 1))
@@ -187,7 +189,11 @@ def optimize_mesh(
     # ==============================================================================================
 
     render_ref_mesh = mesh.compute_tangents(ref_mesh)
-    render_ref_mesh = mesh.skinning(render_ref_mesh)
+
+    # set up skinning for reference mesh
+    if FLAGS.skinning:
+        render_ref_mesh = mesh.skinning(render_ref_mesh)
+    
     # Compute AABB of reference mesh. Used for centering during rendering TODO: Use pre frame AABB?
     ref_mesh_aabb = mesh.aabb(render_ref_mesh.eval())
 
@@ -208,7 +214,8 @@ def optimize_mesh(
     opt_base_mesh = mesh.compute_tangents(opt_base_mesh)
 
     # Set up opt mesh skining
-    opt_base_mesh = mesh.skinning(opt_base_mesh)
+    if FLAGS.skinning:
+        opt_base_mesh = mesh.skinning(opt_base_mesh)
 
     # Subdivide if we're doing displacement mapping
     if FLAGS.subdivision > 0:

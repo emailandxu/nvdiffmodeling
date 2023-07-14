@@ -168,6 +168,7 @@ def skinning(mesh):
             attr_vtx_idx = [None] * n_attrs
             for ti in range(0, len(t_pos_idx)):
                 for vi in range(0, 3):
+                    # don't know why put this assertion here, the attr_vtx_idx alway be full of None leads to fail
                     # assert attr_vtx_idx[t_attr_idx[ti][vi]] is None or attr_vtx_idx[t_attr_idx[ti][vi]] == t_pos_idx[ti][vi], "Trying to skin a mesh with shared normals (normal with 2 sets of skinning weights)"
                     attr_vtx_idx[t_attr_idx[ti][vi]] = t_pos_idx[ti][vi]
 
