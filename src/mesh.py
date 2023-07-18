@@ -88,6 +88,48 @@ class Mesh:
     def eval(self, params={}):
         return self
 
+    def init_triangles_errors(self):
+        print("init triangles accumulation!!!!!")
+        tri_amount = self.t_pos_idx.size(0)
+        self.__class__.triangles_errors = torch.zeros((tri_amount+1), device=self.t_pos_idx.device)
+        self.__class__.triangles_errors_cnt = torch.ones((tri_amount+1), device=self.t_pos_idx.device).int()
+
+    @torch.no_grad()
+    def update_triangles_errors(self, tri_id_perpixel, loss_per_pixel):
+        """
+        borrow from nerf2mesh
+        """
+        import torch_scatter
+        if not hasattr(self, "triangles_errors"):
+            self.init_triangles_errors()
+
+        tri_id_perpixel = tri_id_perpixel.reshape(-1)
+        loss_per_pixel = loss_per_pixel.mean(-1).reshape(-1)
+        # include 0 as non-triangle error
+        torch_scatter.scatter_add(src=loss_per_pixel, index=tri_id_perpixel, out=self.triangles_errors)
+        torch_scatter.scatter_add(torch.ones_like(loss_per_pixel).int(), tri_id_perpixel, out=self.triangles_errors_cnt)
+
+
+    @torch.no_grad()
+    def get_triangles_errors_per_pixel(self, tri_id_perpixel):
+        """
+        render triangle error by tri_id_perpixel according to self.triangles_errors
+        """
+        
+        if not hasattr(self, "triangles_errors"):
+            self.init_triangles_errors()
+        
+        device = tri_id_perpixel.device
+        tri_amount = self.t_pos_idx.size(0)
+
+        appeared = torch.unique(tri_id_perpixel) # find out every single appeared triangle
+        appeared = appeared[1:] # except the first one which is -1
+        faces_color = torch.zeros((tri_amount+1, 3), device=device) # initialize all faces a zero color
+        faces_color[..., 0] = self.triangles_errors / self.triangles_errors_cnt
+        faces_color[0] = torch.zeros(3, device=device) # background color
+        triviz = faces_color[tri_id_perpixel] # sample face color of each pixel
+        return triviz.mean(dim=-1, keepdim=True).repeat([1, 1, 1, 3])
+
 ######################################################################################
 # Compute AABB
 ######################################################################################

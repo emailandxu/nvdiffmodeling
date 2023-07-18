@@ -1,4 +1,5 @@
 {
+    "old_base_mesh": "data/sphere.obj",
     "base_mesh": "data/lumba/lumba.obj",
     "ref_mesh": "data/lumba/lumba.obj",
     "camera_eye": [ 2.5, 0.0, -2.5 ],
@@ -11,8 +12,8 @@
     "batch": 16,
     "learning_rate": 0.0001,
     "min_roughness" : 0.25,
-    "skip_train": ["position", "kd", "ks", "normal", "displacement", "bone_mtx"],
+    "skip_train": ["kd", "ks", "normal", "displacement", "bone_mtx", "weights"],
     "out_dir" : "lumba",
-    "optimizing_bsdf": "pbr",
-    "skinning": true
+    "optimizing_bsdf": "normal",
+    "skinning": false
 }

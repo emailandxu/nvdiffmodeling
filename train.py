@@ -165,7 +165,8 @@ def optimize_mesh(
         
         bone_mtx_opt.requires_grad_(True)
         v_weights_opt.requires_grad_(True)
-
+        
+        # Add trainable arguments according to config
         if not 'bone_mtx' in FLAGS.skip_train: 
             trainable_list += [bone_mtx_opt]
         if not 'weights' in FLAGS.skip_train:
@@ -300,21 +301,25 @@ def optimize_mesh(
                         num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
                     img_base = util.scale_img_nhwc(img_base, [FLAGS.display_res, FLAGS.display_res])
 
-                img_opt = render.render_mesh(glctx, _opt_detail, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
+                img_opt, triid = render.render_mesh_with_triid(glctx, _opt_detail, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
                     num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
                 img_ref = render.render_mesh(glctx, _opt_ref, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
                     num_layers=1, spp=FLAGS.spp, background=background, min_roughness=FLAGS.min_roughness)
 
+                triangle_errors_gray = _opt_detail.get_triangles_errors_per_pixel(triid)
+
                 # Rescale
                 img_opt  = util.scale_img_nhwc(img_opt,  [FLAGS.display_res, FLAGS.display_res])
                 img_ref  = util.scale_img_nhwc(img_ref,  [FLAGS.display_res, FLAGS.display_res])
+                img_error = util.scale_img_nhwc(triangle_errors_gray,  [FLAGS.display_res, FLAGS.display_res])
+
 
                 if FLAGS.subdivision > 0:
                     img_disp = torch.clamp(torch.abs(displacement_map_var[None, ...]), min=0.0, max=1.0).repeat(1,1,1,3)
                     img_disp = util.scale_img_nhwc(img_disp, [FLAGS.display_res, FLAGS.display_res])
                     result_image = torch.cat([img_base, img_opt, img_ref], axis=2)
                 else:
-                    result_image = torch.cat([img_opt, img_ref], axis=2)
+                    result_image = torch.cat([img_opt, img_ref, img_error], axis=2)
 
             result_image[0] = util.tonemap_srgb(result_image[0])
             np_result_image = result_image[0].detach().cpu().numpy()
@@ -384,7 +389,9 @@ def optimize_mesh(
         # ==============================================================================================
         #  Render the trainable mesh
         # ==============================================================================================
-        color_opt = render.render_mesh(glctx, _opt_detail, mvp, campos, lightpos, FLAGS.light_power, iter_res, 
+        
+        # triid is triangle id according to each pixel
+        color_opt, triid = render.render_mesh_with_triid(glctx, _opt_detail, mvp, campos, lightpos, FLAGS.light_power, iter_res, 
             spp=iter_spp, num_layers=FLAGS.layers, msaa=True , background=randomBgColor, 
             min_roughness=FLAGS.min_roughness)
 
@@ -395,14 +402,18 @@ def optimize_mesh(
         img_loss_map = image_loss_fn(color_opt, color_ref)
         img_loss = torch.mean(img_loss_map)
 
+        _opt_detail.update_triangles_errors(triid, img_loss_map)
+
         # Compute laplace loss
         lap_loss = lap_loss_fn.eval(params)
 
         # Debug, store every training iteration
         if FLAGS.debug:
-            result_image = torch.cat([color_opt, color_ref, img_loss_map], axis=2)
-            np_result_image = result_image[0].detach().cpu().numpy()
-            util.save_image(out_dir + '/' + ('train_%06d.png' % it), np_result_image)
+            from debug import save
+            with torch.no_grad():
+                triangle_errors_gray = _opt_detail.get_triangles_errors_per_pixel(triid, )
+                result_image = torch.cat([color_opt, color_ref, triangle_errors_gray], axis=2)
+                save(result_image, 'train')
 
         # Log losses
         img_loss_vec.append(img_loss.item())

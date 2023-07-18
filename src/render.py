@@ -219,3 +219,61 @@ def render_mesh(
     return out
 
 
+def render_mesh_with_triid(
+        ctx,
+        mesh,
+        mtx_in,
+        view_pos,
+        light_pos,
+        light_power,
+        resolution,
+        spp                       = 1,
+        num_layers                = 1,
+        msaa                      = False,
+        background                = None,
+        antialias                 = True,
+        min_roughness             = 0.08
+    ):
+
+    def prepare_input_vector(x):
+        x = torch.tensor(x, dtype=torch.float32, device='cuda') if not torch.is_tensor(x) else x
+        return x[:, None, None, :] if len(x.shape) == 2 else x
+
+    full_res = resolution*spp
+
+    # Convert numpy arrays to torch tensors
+    mtx_in      = torch.tensor(mtx_in, dtype=torch.float32, device='cuda') if not torch.is_tensor(mtx_in) else mtx_in
+    light_pos   = prepare_input_vector(light_pos)
+    light_power = prepare_input_vector(light_power)
+    view_pos    = prepare_input_vector(view_pos)
+
+    # clip space transform
+    v_pos_clip = ru.xfm_points(mesh.v_pos[None, ...], mtx_in)
+
+    # Render all layers front-to-back
+    layers = []
+    with dr.DepthPeeler(ctx, v_pos_clip, mesh.t_pos_idx.int(), [resolution*spp, resolution*spp]) as peeler:
+        for _ in range(num_layers):
+            rast, db = peeler.rasterize_next_layer()
+            layers += [(render_layer(rast, db, mesh, view_pos, light_pos, light_power, resolution, min_roughness, spp, msaa), rast)]
+
+    # Clear to background layer
+    if background is not None:
+        assert background.shape[1] == resolution and background.shape[2] == resolution
+        if spp > 1:
+            background = util.scale_img_nhwc(background, [full_res, full_res], mag='nearest', min='nearest')
+        accum_col = background
+    else:
+        accum_col = torch.zeros(size=(1, full_res, full_res, 3), dtype=torch.float32, device='cuda')
+
+    # Composite BACK-TO-FRONT
+    for color, rast in reversed(layers):
+        alpha     = (rast[..., -1:] > 0) * color[..., 3:4]
+        accum_col = torch.lerp(accum_col, color[..., 0:3], alpha)
+        if antialias:
+            accum_col = dr.antialias(accum_col.contiguous(), rast, v_pos_clip, mesh.t_pos_idx.int()) # TODO: need to support bfloat16
+
+    # Downscale to framebuffer resolution. Use avg pooling 
+    out = util.avg_pool_nhwc(accum_col, spp) if spp > 1 else accum_col
+
+    return out, rast[..., -1].long()

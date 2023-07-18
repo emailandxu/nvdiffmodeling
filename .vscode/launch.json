@@ -13,7 +13,10 @@
             "justMyCode": true,
             "args": [
                 "--config", "configs/lumba.json",
-            ]
+            ],
+            "env":{
+                "CUDA_VISIBLE_DEVICES": "2"
+            }
         }
     ]
 }
