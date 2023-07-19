@@ -72,7 +72,6 @@ class TrainableMesh():
 
         # Create normalized size versions of the base and reference meshes. Normalized base_mesh is important as it makes it easier to configure learning rate.
         self.normalized_base_mesh = mesh.unit_size(self.base_mesh)
-        self.normalized_ref_mesh = mesh.unit_size(self.ref_mesh)
 
         self.opt_params = self.create_trainable_dict()
         self.trainable_list = self.create_trainable_list(**self.opt_params)
@@ -216,7 +215,7 @@ class TrainableMesh():
         self.opt_params["kd_map_opt"].clamp_(min=0, max=1)
         self.opt_params["ks_map_opt"].clamp_rgb_(minR=0, maxR=1, minG=self.FLAGS.min_roughness, maxG=1.0, minB=0.0, maxB=1.0)
 
-    def save_image(self, glctx, out_dir, img_cnt, render_ref_mesh, ref_mesh_aabb, mesh_scale):
+    def render_image(self, glctx, rotate_y, render_ref_mesh, ref_mesh_aabb, mesh_scale):
         # Background color
         if self.FLAGS.background == 'checker':
             background = torch.tensor(util.checkerboard(self.FLAGS.display_res, 8), dtype=torch.float32, device='cuda')
@@ -229,8 +228,7 @@ class TrainableMesh():
         proj_mtx = util.projection(x=0.4, f=1000.0)
         
         eye = np.array(self.FLAGS.camera_eye)
-        eye = (util.rotate_y(img_cnt * (np.pi / 10)) @ [*eye, 1.])[:3]
-        print(eye)
+        eye = (util.rotate_y(rotate_y) @ [*eye, 1.])[:3]
 
         up  = np.array(self.FLAGS.camera_up)
         at  = np.array([0,0,0])
@@ -256,10 +254,11 @@ class TrainableMesh():
                     num_layers=self.FLAGS.layers, background=background, min_roughness=self.FLAGS.min_roughness)
                 img_base = util.scale_img_nhwc(img_base, [self.FLAGS.display_res, self.FLAGS.display_res])
 
-            img_opt = render.render_mesh(glctx, _opt_detail, a_mvp, a_campos, a_lightpos, self.FLAGS.light_power, self.FLAGS.display_res, 
+            img_opt, triid = render.render_mesh_with_triid(glctx, _opt_detail, a_mvp, a_campos, a_lightpos, self.FLAGS.light_power, self.FLAGS.display_res, 
                 num_layers=self.FLAGS.layers, background=background, min_roughness=self.FLAGS.min_roughness)
-            # pick reference triid
-            img_ref, triid = render.render_mesh_with_triid(glctx, _opt_ref, a_mvp, a_campos, a_lightpos, self.FLAGS.light_power, self.FLAGS.display_res, 
+
+            # can't not pick reference triid
+            img_ref = render.render_mesh(glctx, _opt_ref, a_mvp, a_campos, a_lightpos, self.FLAGS.light_power, self.FLAGS.display_res, 
                 num_layers=1, spp=self.FLAGS.spp, background=background, min_roughness=self.FLAGS.min_roughness)
 
             img_triangle_errors = self.get_triangles_errors_per_pixel(triid)
@@ -279,8 +278,8 @@ class TrainableMesh():
 
         result_image[0] = util.tonemap_srgb(result_image[0])
         np_result_image = result_image[0].detach().cpu().numpy()
+        return np_result_image
 
-        util.save_image(out_dir + '/' + ('img_%06d.png' % img_cnt), np_result_image)
 
     def init_triangles_errors(self):
         print("init triangles accumulation!!!!!")
@@ -311,7 +310,6 @@ class TrainableMesh():
         torch_scatter.scatter_add(src=loss_per_pixel, index=tri_id_perpixel, out=self.triangles_errors)
         torch_scatter.scatter_add(torch.ones_like(loss_per_pixel).int(), tri_id_perpixel, out=self.triangles_errors_cnt)
 
-
     @torch.no_grad()
     def get_triangles_errors_per_pixel(self, tri_id_perpixel):
         """
@@ -331,6 +329,15 @@ class TrainableMesh():
         faces_color[0] = torch.zeros(3, device=device) # background color
         triviz = faces_color[tri_id_perpixel] # sample face color of each pixel
         return triviz.mean(dim=-1, keepdim=True).repeat([1, 1, 1, 3])
+
+    def decimate(self,):
+        import pymeshlab as pml
+        verts = 0
+        faces = 0
+        
+        m = pml.Mesh(verts, faces, f_scalar_array=mask)
+        ms = pml.MeshSet()
+        ms.add_mesh(m, 'mesh') # will copy!
 
 ###############################################################################
 # Main shape fitter function / optimization loop
@@ -405,7 +412,8 @@ def optimize_mesh(
     img_loss_vec = []
     lap_loss_vec = []
     iter_dur_vec = []
-    glctx = dr.RasterizeGLContext()
+    # glctx = dr.RasterizeGLContext()
+    glctx = dr.RasterizeCudaContext()
 
     # Projection matrix
     proj_mtx = util.projection(x=0.4, f=1000.0)
@@ -419,9 +427,14 @@ def optimize_mesh(
         display_image = FLAGS.display_interval and (it % FLAGS.display_interval == 0)
         save_image = FLAGS.save_interval and (it % FLAGS.save_interval == 0)
         if display_image or save_image:
-            trainable_mesh.save_image(glctx, out_dir, img_cnt, render_ref_mesh, ref_mesh_aabb, mesh_scale)
-            img_cnt += 1
-            
+            if display_image:
+                disit = it // FLAGS.display_interval
+                np_result_image = trainable_mesh.render_image(glctx, disit * (np.pi / 20), render_ref_mesh, ref_mesh_aabb, mesh_scale)
+                util.display_image(np_result_image, size=FLAGS.display_res,  title='%d / %d' % (it, FLAGS.iter))
+            if save_image:
+                saveit = it // FLAGS.save_interval
+                np_result_image = trainable_mesh.render_image(glctx, saveit * (np.pi / 10), render_ref_mesh, ref_mesh_aabb, mesh_scale)
+                util.save_image(out_dir + '/' + ('img_%06d.png' % img_cnt), np_result_image)
 
         # ==============================================================================================
         #  Initialize training
@@ -570,7 +583,7 @@ def main():
     parser.add_argument('-rtr', '--random-train-res', action='store_true', default=False)
     parser.add_argument('-dr', '--display-res', type=int, default=None)
     parser.add_argument('-tr', '--texture-res', nargs=2, type=int, default=[1024, 1024])
-    parser.add_argument('-di', '--display-interval', type=int, default=0)
+    parser.add_argument('-di', '--display-interval', type=int, default=10)
     parser.add_argument('-si', '--save-interval', type=int, default=1000)
     parser.add_argument('-lr', '--learning-rate', type=float, default=None)
     parser.add_argument('-lp', '--light-power', type=float, default=5.0)
