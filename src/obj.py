@@ -142,7 +142,7 @@ def load_obj(filename, clear_ks=True, mtl_override=None):
 # Save mesh object to objfile
 ######################################################################################
 
-def write_obj(folder, mesh):
+def write_obj(folder, mesh, save_mtl=True):
     obj_file = os.path.join(folder, 'mesh.obj')
     print("Writing mesh: ", obj_file)
     with open(obj_file, "w") as f:
@@ -186,9 +186,10 @@ def write_obj(folder, mesh):
                 f.write(' %s/%s/%s' % (str(t_pos_idx[i][j]+1), '' if v_tex is None else str(t_tex_idx[i][j]+1), '' if v_nrm is None else str(t_nrm_idx[i][j]+1)))
             f.write("\n")
 
-    mtl_file = os.path.join(folder, 'mesh.mtl')
-    print("Writing material: ", mtl_file)
-    material.save_mtl(mtl_file, mesh.material)
+    if save_mtl:
+        mtl_file = os.path.join(folder, 'mesh.mtl')
+        print("Writing material: ", mtl_file)
+        material.save_mtl(mtl_file, mesh.material)
 
     _write_weights(folder, mesh)
     _write_bones(folder, mesh)

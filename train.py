@@ -27,6 +27,8 @@ from src import regularizer
 from src.mesh import Mesh
 import random
 
+from plyfile import PlyData, PlyElement
+
 RADIUS = 3.5
 
 # Enable to debug back-prop anomalies
@@ -65,7 +67,7 @@ def createLoss(FLAGS):
 ###############################################################################
 
 class TrainableMesh():
-    def __init__(self, FLAGS, base_mesh, ref_mesh) -> None:
+    def __init__(self, FLAGS, base_mesh:Mesh, ref_mesh:Mesh) -> None:
         self.FLAGS = FLAGS
         self.base_mesh = base_mesh
         self.ref_mesh = ref_mesh
@@ -282,7 +284,7 @@ class TrainableMesh():
 
 
     def init_triangles_errors(self):
-        print("init triangles accumulation!!!!!")
+        print("init triangles error accumulation!!!!!")
         tri_amount = self.opt_detail_mesh.eval().t_pos_idx.size(0)
         device = self.opt_detail_mesh.eval().t_pos_idx.device
         self.triangles_errors = torch.zeros((tri_amount+1), device=device)
@@ -323,21 +325,124 @@ class TrainableMesh():
         device = self.opt_detail_mesh.eval().t_pos_idx.device
 
         appeared = torch.unique(tri_id_perpixel) # find out every single appeared triangle
-        appeared = appeared[1:] # except the first one which is -1
+        appeared = appeared[1:] # except the first one which is the background 
         faces_color = torch.zeros((tri_amount+1, 3), device=device) # initialize all faces a zero color
         faces_color[..., 0] = self.triangles_errors / self.triangles_errors_cnt
         faces_color[0] = torch.zeros(3, device=device) # background color
         triviz = faces_color[tri_id_perpixel] # sample face color of each pixel
         return triviz.mean(dim=-1, keepdim=True).repeat([1, 1, 1, 3])
 
-    def decimate(self,):
-        import pymeshlab as pml
-        verts = 0
-        faces = 0
+    @torch.no_grad()
+    def save_ply(self, path, face_quality=None):
+        vertex_dt = np.dtype([('x', '<f8'), ('y', '<f8'), ('z', '<f8')])
+        face_dt = np.dtype([('vertex_indices', 'O'), ('texcoord', 'O'), ('quality', '<f8')])
+
+        # convert format
+        vertices = self.opt_detail_mesh.eval().v_pos.double().cpu().numpy()
+        faces = self.opt_detail_mesh.eval().t_pos_idx.cpu().numpy()
+        uv = self.opt_detail_mesh.eval().v_tex.double().cpu().numpy()
+        uv_idx = self.opt_detail_mesh.eval().t_tex_idx.cpu().numpy()
+
+        vertices = [tuple(line) for line in vertices]
+        faces = [np.array(line) for line in faces]
+
+        uv = [np.array(line) for line in uv[uv_idx].reshape(-1, 6)]
+
+        vertex_ = np.zeros(len(vertices), dtype=vertex_dt)
+        face_ = np.zeros(len(faces), dtype=face_dt)
+
+
+        if face_quality is None:
+            face_quality = np.zeros((len(faces), ), dtype="<f8")
+        else:
+            assert face_quality.shape == (len(faces), )
+
+        vertex_[:] = vertices
+        face_['vertex_indices'][:] = faces
+        face_['texcoord'][:] = uv
+        face_['quality'][:] = face_quality
+
+        vertex_el = PlyElement.describe(vertex_, "vertex")
+        face_el = PlyElement.describe(face_, 'face', val_types={'texcoord': 'f4'})
+        PlyData([vertex_el, face_el]).write(path)
+
+    def load_ply(cls, path) -> "Mesh":
+        vertex_dt = np.dtype([('x', '<f8'), ('y', '<f8'), ('z', '<f8')])
+        face_dt = np.dtype([('vertex_indices', 'O'), ('texcoord', 'O'), ('quality', '<f8')])
+
+        ply = PlyData.read(path)
+        assert ply.elements[0].dtype() == vertex_dt
+        assert ply.elements[1].dtype() == face_dt
+
+        vertices = np.array([list(line) for line in ply.elements[0].data])
+        faces = np.array([list(line) for line in ply.elements[1]['vertex_indices']])
+
+        uv_ = np.array([list(line) for line in ply.elements[1]['texcoord']])
+        _, index = np.unique(faces, return_index=True)
+        uv = uv_.reshape(-1, 2)[index]
+        normals = np.ones_like(vertices)
+
+
+        vertices, faces, uv = vertices.astype(np.float32).copy(), faces.astype(np.int32).copy(), uv.astype(np.float32).copy()
         
-        m = pml.Mesh(verts, faces, f_scalar_array=mask)
+        return Mesh(
+            v_pos=torch.tensor(vertices, device="cuda", dtype=torch.float32),
+            t_pos_idx=torch.tensor(faces, device="cuda", dtype=torch.int64),
+            v_nrm=torch.tensor(normals, device="cuda", dtype=torch.float32),
+            t_nrm_idx=torch.tensor(faces, device="cuda", dtype=torch.int64),
+            v_tex=torch.tensor(uv, device="cuda", dtype=torch.float32),
+            t_tex_idx=torch.tensor(faces, device="cuda", dtype=torch.int64),
+        )
+
+
+    @torch.no_grad()
+    def decimate(self, decimate_ratio=0.1, out_dir="./", epoch=0):
+        print("decimate" + "!"*5)
+        import pymeshlab as pml
+
+        errors = (self.triangles_errors / self.triangles_errors_cnt).cpu().numpy()
+        errors = errors[1:] # remove background loss
+        thresh_decimate = np.percentile(errors, 50)
+        mask = np.zeros_like(errors)
+        mask[(errors < thresh_decimate)] = 1
+
+        self.save_ply(f"{out_dir}/decimating_{epoch}.ply", face_quality=mask)
+
         ms = pml.MeshSet()
-        ms.add_mesh(m, 'mesh') # will copy!
+        ms.load_new_mesh(f"{out_dir}/decimating_{epoch}.ply")
+        ms.compute_selection_by_condition_per_face(condselect='fq == 1')
+        ms.meshing_decimation_quadric_edge_collapse_with_texture(targetfacenum=int((1 - decimate_ratio) * (mask == 1).sum()), selected=True)
+        ms.save_current_mesh(f"{out_dir}/decimated_{epoch}.ply", save_textures=False)
+
+        base_mesh = self.load_ply(f"{out_dir}/decimated_{epoch}.ply")
+        print("verts, faces", len(base_mesh.v_pos), len(base_mesh.t_pos_idx))
+        return self.__class__(self.FLAGS, base_mesh, self.ref_mesh)
+
+    @classmethod
+    def loadmesh(cls, path, basemesh:Mesh) -> "Mesh":
+        import pymeshlab as pml
+        ms = pml.MeshSet()
+        ms.load_new_mesh(path)
+        try:
+            ms.convert_perwedge_uv_into_pervertex_uv()
+        except:
+            print("Convert perwedge to pervertex texture uv failed!")
+
+        m = ms.current_mesh()
+        vertices, faces, normals = m.vertex_matrix(), m.face_matrix(), m.vertex_normal_matrix()
+        if m.has_vertex_tex_coord():
+            uv = m.vertex_tex_coord_matrix()
+        else:
+            raise NotImplementedError("this mesh has no uv?")
+        
+        return Mesh(v_pos=vertices, t_pos_idx=faces, v_nrm=normals, t_nrm_idx=faces, v_tex=uv, t_tex_idx=faces, base=basemesh)
+    
+    @classmethod
+    def dumpmesh(cls, path, mesh:"Mesh", *args, **kwargs):
+        obj.write_obj(path, mesh, save_mtl=False)
+
+    def dump(self, out_dir, *args, **kwargs):
+        obj.write_obj(os.path.join(out_dir, "mesh/"), self.opt_base_mesh.eval(), *args, **kwargs)
 
 ###############################################################################
 # Main shape fitter function / optimization loop
@@ -435,6 +540,9 @@ def optimize_mesh(
                 saveit = it // FLAGS.save_interval
                 np_result_image = trainable_mesh.render_image(glctx, saveit * (np.pi / 10), render_ref_mesh, ref_mesh_aabb, mesh_scale)
                 util.save_image(out_dir + '/' + ('img_%06d.png' % img_cnt), np_result_image)
+                # decimate the mesh
+                trainable_mesh = trainable_mesh.decimate(out_dir=out_dir+"/decimate", epoch=img_cnt)
+                img_cnt += 1
 
         # ==============================================================================================
         #  Initialize training
@@ -567,7 +675,7 @@ def optimize_mesh(
                 (it, img_loss_avg, lap_loss_avg*lap_fac, trainable_mesh.optimizer.param_groups[0]['lr'], iter_dur_avg*1000, util.time_to_text(remaining_time)))
 
     # Save final mesh to file
-    obj.write_obj(os.path.join(out_dir, "mesh/"), trainable_mesh.opt_base_mesh.eval())
+    trainable_mesh.dump(out_dir)
 
 #----------------------------------------------------------------------------
 # Main function.
@@ -583,8 +691,8 @@ def main():
     parser.add_argument('-rtr', '--random-train-res', action='store_true', default=False)
     parser.add_argument('-dr', '--display-res', type=int, default=None)
     parser.add_argument('-tr', '--texture-res', nargs=2, type=int, default=[1024, 1024])
-    parser.add_argument('-di', '--display-interval', type=int, default=10)
-    parser.add_argument('-si', '--save-interval', type=int, default=1000)
+    parser.add_argument('-di', '--display-interval', type=int, default=0)
+    parser.add_argument('-si', '--save-interval', type=int, default=100)
     parser.add_argument('-lr', '--learning-rate', type=float, default=None)
     parser.add_argument('-lp', '--light-power', type=float, default=5.0)
     parser.add_argument('-mr', '--min-roughness', type=float, default=0.08)
